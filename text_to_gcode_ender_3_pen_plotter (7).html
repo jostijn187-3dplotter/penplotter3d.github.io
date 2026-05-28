@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Pen Plotter Engine PRO</title>
+
+<style>
+*{box-sizing:border-box}
+body{
+margin:0;padding:18px;
+font-family:system-ui,Arial;
+background:linear-gradient(180deg,#070A12,#0B0F17);
+color:#e5e7eb;
+}
+
+.container{
+max-width:1200px;
+margin:auto;
+background:#0f172a;
+border:1px solid #1f2937;
+border-radius:18px;
+padding:18px;
+box-shadow:0 10px 30px rgba(0,0,0,0.4);
+}
+
+.header{
+display:flex;
+justify-content:space-between;
+align-items:center;
+margin-bottom:14px;
+}
+
+h2{margin:0;font-size:20px;letter-spacing:0.5px;}
+
+.badge{
+font-size:12px;
+padding:4px 10px;
+border-radius:999px;
+background:#1f2937;
+color:#60a5fa;
+}
+
+.row{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px}
+
+button,select,textarea{
+padding:9px 10px;
+border-radius:10px;
+border:1px solid #334155;
+background:#111827;
+color:white;
+}
+
+button{background:#2563eb;border:none;cursor:pointer;font-weight:600}
+button:hover{background:#1d4ed8;transform:translateY(-1px)}
+
+canvas{
+width:100%;height:460px;
+background:white;
+border-radius:12px;
+cursor:crosshair;
+border:1px solid #e5e7eb;
+}
+
+pre{
+background:#020617;
+color:#22c55e;
+padding:10px;
+border-radius:10px;
+max-height:240px;
+overflow:auto;
+margin-top:10px;
+}
+</style>
+</head>
+
+<body>
+
+<div class="container">
+
+<div class="header">
+<h2>🖨 Pen Plotter Engine PRO</h2>
+<div class="badge">Star Fix + Closed Shapes</div>
+</div>
+
+<div class="row">
+<button onclick="setTool('select')">🖐 Select</button>
+<button onclick="setTool('pen')">✏️ Pen</button>
+<button onclick="setTool('line')">📏 Line</button>
+<button onclick="addShape('star')">⭐</button>
+<button onclick="addShape('heart')">❤️</button>
+<button onclick="addShape('smile')">🙂</button>
+<button onclick="addText()">📝 Text</button>
+<button onclick="clearAll()">Clear</button>
+<button onclick="generate()">G-code</button>
+<button onclick="downloadGcode()">⬇ Download</button>
+<button onclick="zoomIn()">➕ Zoom</button>
+<button onclick="zoomOut()">➖ Zoom</button>
+</div>
+
+<div class="row">
+<textarea id="text">HELLO</textarea>
+</div>
+
+<canvas id="c" width="1000" height="460"></canvas>
+
+<pre id="out"></pre>
+</div>
+
+<script>
+const c=document.getElementById('c');
+const ctx=c.getContext('2d');
+
+let tool='select';
+let drawing=false;
+let gcode='';
+let zoom=1;
+
+let scene={text:[],shapes:[],draw:[]};
+let selected=null;
+let handle=null;
+let resizing=false;
+
+window.setTool=function(t){tool=t;selected=null;handle=null;};
+
+function pos(e){
+let r=c.getBoundingClientRect();
+return {x:(e.clientX-r.left)*(c.width/r.width),y:(e.clientY-r.top)*(c.height/r.height)};
+}
+
+function getBox(o){
+return {x:o.x-40*(o.scale||1),y:o.y-40*(o.scale||1),w:80*(o.scale||1),h:80*(o.scale||1)};
+}
+
+function textBox(t){
+ctx.font="18px Arial";
+let w=ctx.measureText(t.text).width;
+return {x:t.x,y:t.y-18,w:w,h:22};
+}
+
+function hit(p){
+for(let i=scene.shapes.length-1;i>=0;i--){
+let o=scene.shapes[i];
+if(Math.hypot(p.x-o.x,p.y-o.y)<40) return o;
+}
+for(let i=scene.text.length-1;i>=0;i--){
+let t=scene.text[i];
+let b=textBox(t);
+if(p.x>b.x && p.x<b.x+b.w && p.y>b.y && p.y<b.y+b.h) return t;
+}
+return null;
+}
+
+function hitHandle(p,box){const h=8;
+const c=[{n:'br',x:box.x+box.w,y:box.y+box.h},{n:'tl',x:box.x,y:box.y},{n:'tr',x:box.x+box.w,y:box.y},{n:'bl',x:box.x,y:box.y+box.h}];
+for(let k of c){if(Math.hypot(p.x-k.x,p.y-k.y)<h) return k.n;}return null;}
+
+c.onmousedown=(e)=>{
+let p=pos(e);
+drawing=true;
+
+if(tool==='select'){
+selected=hit(p);
+if(selected && selected.type!=='text'){
+handle=hitHandle(p,getBox(selected));resizing=!!handle;
+}
+return;
+}
+
+if(tool==='pen') scene.draw.push([[p.x,p.y]]);
+};
+
+c.onmousemove=(e)=>{
+let p=pos(e);
+if(!drawing) return;
+
+if(tool==='select' && selected){
+if(resizing && selected.type!=='text'){
+let d=Math.hypot(p.x-selected.x,p.y-selected.y);
+selected.scale=(selected.scale||1)*(d/50);
+}else{
+selected.x=p.x;
+selected.y=p.y;
+}
+render();return;
+}
+
+if(tool==='pen'){scene.draw[scene.draw.length-1].push([p.x,p.y]);}
+render();
+};
+
+c.onmouseup=()=>{drawing=false;handle=null;resizing=false;};
+
+function star(cx,cy,r,s=1){let p=[],rr=r*s,inner=rr*0.5;for(let i=0;i<10;i++){let a=i*Math.PI/5;let rad=(i%2===0)?rr:inner;p.push([cx+Math.cos(a-Math.PI/2)*rad,cy+Math.sin(a-Math.PI/2)*rad]);}return p;}
+function circle(cx,cy,r){let a=[];for(let i=0;i<24;i++){let t=i/24*Math.PI*2;a.push([cx+Math.cos(t)*r,cy+Math.sin(t)*r]);}return a;}
+function smile(cx,cy,r,s=1){let p=circle(cx,cy,r*s);for(let i=0;i<10;i++){let t=i/10;p.push([cx-(r*s)/2+t*(r*s),cy+(r*s)/3+Math.sin(t*Math.PI)*(r*s)/4]);}return p;}
+function heart(cx,cy,s){let p=[];for(let t=0;t<6.3;t+=0.15){let x=16*Math.pow(Math.sin(t),3);let y=-(13*Math.cos(t)-5*Math.cos(2*t)-2*Math.cos(3*t)-Math.cos(4*t));p.push([cx+x*s,cy+y*s]);}return p;}
+
+function shapePath(o){let s=o.scale||1;
+if(o.type==='star')return star(o.x,o.y,30,s);
+if(o.type==='heart')return heart(o.x,o.y,0.6*s);
+if(o.type==='smile')return smile(o.x,o.y,30,s);
+return [];}
+
+function addShape(t){scene.shapes.push({type:t,x:400,y:200,scale:1});render();}
+function addText(){scene.text.push({type:'text',text:document.getElementById('text').value,x:120,y:80});render();}
+
+function render(){
+ctx.clearRect(0,0,c.width,c.height);
+ctx.save();ctx.scale(zoom,zoom);
+
+for(let o of scene.shapes){
+ctx.beginPath();
+let p=shapePath(o);
+if(p.length){ctx.moveTo(p[0][0],p[0][1]);for(let i=1;i<p.length;i++)ctx.lineTo(p[i][0],p[i][1]);}
+ctx.closePath();
+ctx.stroke();
+
+if(selected===o){let b=getBox(o);
+ctx.strokeStyle='red';ctx.strokeRect(b.x,b.y,b.w,b.h);ctx.strokeStyle='black';}
+}
+
+for(let t of scene.text){
+ctx.font="18px Arial";
+ctx.fillStyle="black";
+ctx.fillText(t.text,t.x,t.y);
+if(selected===t){let b=textBox(t);
+ctx.strokeStyle='red';ctx.strokeRect(b.x,b.y,b.w,b.h);ctx.strokeStyle='black';}
+}
+
+for(let d of scene.draw){ctx.beginPath();ctx.moveTo(d[0][0],d[0][1]);for(let i=1;i<d.length;i++)ctx.lineTo(d[i][0],d[i][1]);ctx.stroke();}
+
+ctx.restore();
+}
+
+function clearAll(){scene={text:[],shapes:[],draw:[]};render();}
+function zoomIn(){zoom*=1.1;render();}
+function zoomOut(){zoom/=1.1;render();}
+
+function textToGcode(txt,x,y,s){let g="",cx=x,size=8*s;
+for(let c of txt){if(c===' '){cx+=size;continue;}
+let w=size;
+g+=`G0 X${cx.toFixed(2)} Y${y.toFixed(2)}\nG1 Z5 F1200\nG1 Z0 F1200\n`;
+g+=`G1 X${cx.toFixed(2)} Y${y.toFixed(2)} F1500\nG1 X${(cx+w).toFixed(2)} Y${y.toFixed(2)}\nG1 X${(cx+w).toFixed(2)} Y${(y+w).toFixed(2)}\nG1 X${cx.toFixed(2)} Y${(y+w).toFixed(2)}\nG1 X${cx.toFixed(2)} Y${y.toFixed(2)}\nG1 Z5 F1200\n`;
+cx+=w*1.2;}return g;}
+
+function generate(){
+let g="G21\nG90\nG28\nG1 F1500\n",s=0.2;
+for(let o of scene.shapes){let p=shapePath(o);if(!p.length)continue;
+g+="G1 Z5 F1200\n";for(let i=0;i<p.length;i++){let x=p[i][0]*s,y=p[i][1]*s;if(i===0)g+=`G1 X${x.toFixed(2)} Y${y.toFixed(2)} F1500\nG1 Z0 F1200\n`;else g+=`G1 X${x.toFixed(2)} Y${y.toFixed(2)} F1500\n`;}g+="G1 Z5 F1200\n";}
+for(let t of scene.text){g+=textToGcode(t.text,t.x*s,t.y*s,1);}
+gcode=g;document.getElementById('out').textContent=g;}
+
+function downloadGcode(){const blob=new Blob([gcode||document.getElementById('out').textContent||''],{type:'text/plain'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='plotter.gcode';a.click();}
+
+render();
+</script>
+</body>
+</html>
